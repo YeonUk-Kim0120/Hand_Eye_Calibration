@@ -1,0 +1,5 @@
+/**:
+  ros__parameters:
+    checkerboard_rows: 6       # 체커보드 내부 코너의 세로 개수
+    checkerboard_cols: 9       # 체커보드 내부 코너의 가로 개수
+    square_size: 0.021         # 체커보드 한 칸의 실제 크기 (미터 단위, 2.1cm)

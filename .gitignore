@@ -1,0 +1,31 @@
+# ROS 2 빌드 결과물
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 캘리브레이션 데이터 (용량이 크고 개인 환경마다 다름)
+*.npz
+calibration_result_*.yaml
+calibration_samples.npz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 임시 파일
+*.log
+*.tmp

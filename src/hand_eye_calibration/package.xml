@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hand_eye_calibration</name>
+  <version>0.0.1</version>
+  <description>
+      A package for Hand-on-Base (Eye-to-Hand) calibration using ZED 2i and OpenCV.
+      Includes nodes for checkerboard detection, a mock robot publisher, and a calibration data collector.
+  </description>
+
+  <maintainer email="kimyeonuk0120@gmail.com">Yeonuk Kim</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>cv_bridge</depend>
+  <depend>message_filters</depend>
+
+  <exec_depend>zed_ros2_wrapper</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>ament_flake8</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
