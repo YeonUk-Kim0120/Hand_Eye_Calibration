@@ -46,6 +46,7 @@ setup(
             'detector = hand_eye_calibration.checkerboard_detector_node:main',
             'mock_robot = hand_eye_calibration.mock_robot_publisher_node:main',
             'collector = hand_eye_calibration.calibration_collector_node:main',
+            'tf_to_pose = hand_eye_calibration.tf_to_pose_publisher:main',
         ],
     },
 )

@@ -16,7 +16,7 @@ class CheckerboardDetectorNode(Node):
         # 나중에 launch 파일이나 config/checkerboard_params.yaml에서 수정 가능
         self.declare_parameter('checkerboard_rows', 6)
         self.declare_parameter('checkerboard_cols', 9)
-        self.declare_parameter('square_size', 0.021)  # 2.5cm
+        self.declare_parameter('square_size', 0.018)  # 2.5cm
         self.declare_parameter('show_visualization', True)  # 시각화 활성화 여부
 
         self.rows = self.get_parameter('checkerboard_rows').value

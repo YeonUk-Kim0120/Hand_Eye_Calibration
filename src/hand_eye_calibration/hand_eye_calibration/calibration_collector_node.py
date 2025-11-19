@@ -15,6 +15,14 @@ class CalibrationCollectorNode(Node):
     def __init__(self):
         super().__init__('calibration_collector_node')
 
+        # 작업 디렉토리를 프로젝트 루트로 설정
+        self.workspace_root = os.path.expanduser('~/Desktop/Hand_Eye_Calibration')
+        if os.path.exists(self.workspace_root):
+            os.chdir(self.workspace_root)
+            self.get_logger().info(f"Working directory: {self.workspace_root}")
+        else:
+            self.get_logger().warn(f"Workspace not found: {self.workspace_root}, using current directory")
+
         # 샘플 저장 파일 경로 파라미터
         self.declare_parameter('samples_file', 'calibration_samples.npz')
         self.declare_parameter('auto_save', True)  # 각 캡처마다 자동 저장
@@ -121,110 +129,126 @@ class CalibrationCollectorNode(Node):
 
         self.get_logger().info(f"Running Hand-Eye calibration with {len(self.T_base_ee_list)} samples...")
 
-        # cv2.calibrateRobotWorldHandEye에 맞게 R과 t 분리
-        R_base_ee_list = []
-        t_base_ee_list = []
-        R_cam_board_list = []
-        t_cam_board_list = []
-
-        for T_base_ee, T_cam_board in zip(self.T_base_ee_list, self.T_cam_board_list):
-            R_base_ee_list.append(T_base_ee[:3, :3])
-            t_base_ee_list.append(T_base_ee[:3, 3].reshape(3, 1)) # (3,1) 형태로
-            
-            R_cam_board_list.append(T_cam_board[:3, :3])
-            t_cam_board_list.append(T_cam_board[:3, 3].reshape(3, 1)) # (3,1) 형태로
-
-        # Hand-on-Base (Eye-to-Hand) 캘리브레이션
-        # calibrateRobotWorldHandEye 사용
+        # Eye-to-Hand 캘리브레이션 (카메라 고정, 체커보드가 로봇에 부착)
         # 
-        # OpenCV 함수:
-        #   입력: R_world2cam (world→camera), R_base2gripper (base→gripper)
-        #   출력: R_base2world (base→world), R_gripper2cam (gripper→camera)
+        # 올바른 수식: inv(A_i) * X = Z * inv(B_i)
+        #   gripper → base → camera = gripper → target → camera
+        # 
+        #   X: base → camera (T_base_cam) - 우리가 구하려는 것! (고정)
+        #   A_i: base → gripper (T_base_ee) - 로봇의 여러 포즈
+        #   B_i: camera → target (T_cam_board) - 카메라가 본 체커보드
+        #   Z: gripper → target (T_ee_board) - 체커보드 장착 (고정)
         #
-        # 우리 매핑:
-        #   world = checkerboard
-        #   gripper = end_effector
-        #
-        # 따라서:
-        #   입력: T_board_cam (board→cam) = inv(T_cam_board), T_base_ee
-        #   출력: T_base_board, T_ee_cam
-        #
-        # 우리가 원하는 것:
-        #   T_base_cam = T_base_board * inv(T_board_cam) = T_base_board * T_cam_board
-        #   T_ee_board = inv(T_ee_cam) * inv(T_board_cam) = inv(T_ee_cam) * T_cam_board
+        # cv2.calibrateRobotWorldHandEye() 사용:
+        # - R_world2cam, t_world2cam: inv(T_cam_board) = T_board_cam
+        # - R_base2gripper, t_base2gripper: T_base_ee
+        # - 출력: R_base2world (=T_base_cam), R_gripper2cam (=T_ee_board)
+        
         try:
-            # 입력 변환: T_cam_board를 T_board_cam (board→camera)로 역변환
+            # 입력 데이터 준비
+            R_base_ee_list = []
+            t_base_ee_list = []
             R_board_cam_list = []
             t_board_cam_list = []
             
-            for T_cam_board in self.T_cam_board_list:
+            for T_base_ee, T_cam_board in zip(self.T_base_ee_list, self.T_cam_board_list):
+                # T_base_ee → R, t (base → end-effector)
+                R_base_ee_list.append(T_base_ee[:3, :3])
+                t_base_ee_list.append(T_base_ee[:3, 3].reshape(3, 1))
+                
+                # inv(T_cam_board) = T_board_cam → R, t (board → camera)
                 T_board_cam = np.linalg.inv(T_cam_board)
                 R_board_cam_list.append(T_board_cam[:3, :3])
                 t_board_cam_list.append(T_board_cam[:3, 3].reshape(3, 1))
             
-            # calibrateRobotWorldHandEye 호출
-            R_base_board, t_base_board, R_ee_cam, t_ee_cam = cv2.calibrateRobotWorldHandEye(
-                R_world2cam=R_board_cam_list,      # T_board_cam (checkerboard → camera)
+            # cv2.calibrateRobotWorldHandEye 호출
+            R_base_cam, t_base_cam, R_ee_board, t_ee_board = cv2.calibrateRobotWorldHandEye(
+                R_world2cam=R_board_cam_list,
                 t_world2cam=t_board_cam_list,
-                R_base2gripper=R_base_ee_list,     # T_base_ee (base → end-effector)
+                R_base2gripper=R_base_ee_list,
                 t_base2gripper=t_base_ee_list,
-                method=cv2.CALIB_ROBOT_WORLD_HAND_EYE_SHAH  # Shah 방법 사용
+                method=cv2.CALIB_ROBOT_WORLD_HAND_EYE_SHAH
             )
             
-            # 출력:
-            # R_base_board, t_base_board: T_base_board (base → checkerboard)
-            # R_ee_cam, t_ee_cam: T_ee_cam (end-effector → camera)
+            # 결과 조합
+            T_base_cam = np.eye(4)
+            T_base_cam[:3, :3] = R_base_cam
+            T_base_cam[:3, 3] = t_base_cam.flatten()
             
-            # 우리가 원하는 것 계산:
-            # 1. T_base_cam = T_base_board * T_board_cam = T_base_board * inv(T_cam_board)
-            T_base_board = np.eye(4)
-            T_base_board[:3, :3] = R_base_board
-            T_base_board[:3, 3] = t_base_board.flatten()
+            T_ee_board = np.eye(4)
+            T_ee_board[:3, :3] = R_ee_board
+            T_ee_board[:3, 3] = t_ee_board.flatten()
             
-            # 첫 번째 샘플의 T_cam_board 사용 (모든 샘플에서 일관성 확인 가능)
-            T_board_cam = np.linalg.inv(self.T_cam_board_list[0])
-            T_base_cam = np.dot(T_base_board, T_board_cam)
-            
-            R_base_cam = T_base_cam[:3, :3]
-            t_base_cam = T_base_cam[:3, 3].reshape(3, 1)
-            
-            # 2. T_ee_board = inv(T_ee_cam) * T_cam_board
-            T_ee_cam = np.eye(4)
-            T_ee_cam[:3, :3] = R_ee_cam
-            T_ee_cam[:3, 3] = t_ee_cam.flatten()
-            
-            T_cam_ee = np.linalg.inv(T_ee_cam)
-            T_ee_board = np.dot(T_cam_ee, self.T_cam_board_list[0])
-            
-            R_ee_board = T_ee_board[:3, :3]
-            t_ee_board = T_ee_board[:3, 3].reshape(3, 1)
+            # 검증: 모든 샘플에서 inv(A_i)*X = Z*inv(B_i)가 성립하는지 확인
+            # 즉, inv(T_base_ee) * T_base_cam = T_ee_board * inv(T_cam_board)
+            residuals = []
+            for T_base_ee, T_cam_board in zip(self.T_base_ee_list, self.T_cam_board_list):
+                T_ee_base = np.linalg.inv(T_base_ee)
+                T_board_cam = np.linalg.inv(T_cam_board)
+                
+                # 좌변: inv(A)*X
+                left_side = np.dot(T_ee_base, T_base_cam)
+                # 우변: Z*inv(B)
+                right_side = np.dot(T_ee_board, T_board_cam)
+                
+                # 차이 계산 (translation 부분만)
+                residual = np.linalg.norm(left_side[:3, 3] - right_side[:3, 3])
+                residuals.append(residual)
 
             # 결과 출력
-            self.get_logger().info("=== Calibration Results ===")
+            self.get_logger().info("=" * 60)
+            self.get_logger().info("=== Eye-to-Hand Calibration Results ===")
+            self.get_logger().info("=" * 60)
             self.get_logger().info("")
-            self.get_logger().info("--- T_base_cam (base → camera) ---")
-            self.get_logger().info(f"Transformation Matrix:\n{T_base_cam}")
-
-            # (참고) 쿼터니언과 XYZ로도 분리하여 출력
+            self.get_logger().info("🎯 T_base_cam (Robot Base → Camera) - PRIMARY RESULT")
+            self.get_logger().info(f"   This is the fixed transformation you need!")
+            self.get_logger().info(f"   Translation (xyz) [m]: [{t_base_cam[0][0]:.6f}, {t_base_cam[1][0]:.6f}, {t_base_cam[2][0]:.6f}]")
+            
+            # 쿼터니언 계산
             q_base_cam = tf_transformations.quaternion_from_matrix(T_base_cam)
-            self.get_logger().info(f"Translation (xyz): [{t_base_cam[0][0]:.6f}, {t_base_cam[1][0]:.6f}, {t_base_cam[2][0]:.6f}]")
-            self.get_logger().info(f"Orientation (xyzw): [{q_base_cam[0]:.6f}, {q_base_cam[1]:.6f}, {q_base_cam[2]:.6f}, {q_base_cam[3]:.6f}]")
+            self.get_logger().info(f"   Orientation (xyzw): [{q_base_cam[0]:.6f}, {q_base_cam[1]:.6f}, {q_base_cam[2]:.6f}, {q_base_cam[3]:.6f}]")
+            self.get_logger().info("")
+            self.get_logger().info(f"   Homogeneous Matrix:\n{T_base_cam}")
             self.get_logger().info("")
             
-            # 추가 정보: T_ee_board도 출력
+            # T_ee_board 검증 정보
             q_ee_board = tf_transformations.quaternion_from_matrix(T_ee_board)
-            self.get_logger().info("--- T_ee_board (end-effector → checkerboard) ---")
-            self.get_logger().info(f"Translation (xyz): [{t_ee_board[0][0]:.6f}, {t_ee_board[1][0]:.6f}, {t_ee_board[2][0]:.6f}]")
-            self.get_logger().info(f"Orientation (xyzw): [{q_ee_board[0]:.6f}, {q_ee_board[1]:.6f}, {q_ee_board[2]:.6f}, {q_ee_board[3]:.6f}]")
+            self.get_logger().info("📋 T_ee_board (End-Effector → Checkerboard) - VERIFICATION")
+            self.get_logger().info(f"   This should be constant (checkerboard mounting)")
+            self.get_logger().info(f"   Translation (xyz) [m]: [{t_ee_board[0][0]:.6f}, {t_ee_board[1][0]:.6f}, {t_ee_board[2][0]:.6f}]")
+            self.get_logger().info(f"   Orientation (xyzw): [{q_ee_board[0]:.6f}, {q_ee_board[1]:.6f}, {q_ee_board[2]:.6f}, {q_ee_board[3]:.6f}]")
             self.get_logger().info("")
+            
+            # 일관성 검증: residual 통계
+            if len(residuals) > 0:
+                residuals_array = np.array(residuals)
+                mean_residual = np.mean(residuals_array)
+                max_residual = np.max(residuals_array)
+                
+                self.get_logger().info("📊 Consistency Check (Equation Residuals):")
+                self.get_logger().info(f"   inv(A_i)*X = Z*inv(B_i) should hold for all samples")
+                self.get_logger().info(f"   Mean residual [mm]: {mean_residual*1000:.3f}")
+                self.get_logger().info(f"   Max residual [mm]: {max_residual*1000:.3f}")
+                
+                if max_residual * 1000 < 5.0:
+                    self.get_logger().info(f"   ✅ Excellent consistency!")
+                elif max_residual * 1000 < 20.0:
+                    self.get_logger().warn(f"   ⚠️  Moderate consistency")
+                else:
+                    self.get_logger().warn(f"   ❌ Poor consistency - Check your data!")
+                self.get_logger().info("")
+            
+            self.get_logger().info("=" * 60)
             # 결과를 YAML 파일로 저장
             result_data = {
                 'calibration_result': {
                     'timestamp': datetime.now().isoformat(),
                     'num_samples': len(self.T_base_ee_list),
-                    'method': 'CALIB_ROBOT_WORLD_HAND_EYE_SHAH',
-                    'calibration_type': 'Hand-on-Base (Eye-to-Hand)',
+                    'method': 'CALIB_HAND_EYE_TSAI',
+                    'calibration_type': 'Eye-to-Hand',
+                    'description': 'Camera fixed, robot moves with checkerboard on end-effector',
                     'T_base_cam': {
+                        'description': 'Transformation from robot base to camera (what we want!)',
                         'translation': {
                             'x': float(t_base_cam[0][0]),
                             'y': float(t_base_cam[1][0]),
@@ -240,6 +264,7 @@ class CalibrationCollectorNode(Node):
                         'homogeneous_matrix': T_base_cam.tolist()
                     },
                     'T_ee_board': {
+                        'description': 'Transformation from end-effector to checkerboard (verification)',
                         'translation': {
                             'x': float(t_ee_board[0][0]),
                             'y': float(t_ee_board[1][0]),
@@ -252,25 +277,8 @@ class CalibrationCollectorNode(Node):
                             'w': float(q_ee_board[3])
                         },
                         'rotation_matrix': R_ee_board.tolist(),
-                        'homogeneous_matrix': T_ee_board.tolist()
-                    },
-                    'intermediate_results': {
-                        'T_base_board': {
-                            'translation': {
-                                'x': float(t_base_board[0][0]),
-                                'y': float(t_base_board[1][0]),
-                                'z': float(t_base_board[2][0])
-                            },
-                            'rotation_matrix': R_base_board.tolist()
-                        },
-                        'T_ee_cam': {
-                            'translation': {
-                                'x': float(t_ee_cam[0][0]),
-                                'y': float(t_ee_cam[1][0]),
-                                'z': float(t_ee_cam[2][0])
-                            },
-                            'rotation_matrix': R_ee_cam.tolist()
-                        }
+                        'homogeneous_matrix': T_ee_board.tolist(),
+                        'note': 'This should be consistent across all samples (checkerboard mounting)'
                     }
                 }
             }

@@ -17,7 +17,7 @@ class CheckerboardDetectorNode(Node):
         # 파라미터 선언
         self.declare_parameter('checkerboard_rows', 6)
         self.declare_parameter('checkerboard_cols', 9)
-        self.declare_parameter('square_size', 0.021)  # 2.1cm
+        self.declare_parameter('square_size', 0.018)  # 1.8cm
         self.declare_parameter('show_visualization', True)
         self.declare_parameter('max_reprojection_error', 1.0)  # 픽셀 단위
         self.declare_parameter('pnp_method', 'IPPE')  # ITERATIVE, IPPE, SQPNP
