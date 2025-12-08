@@ -11,9 +11,9 @@ __pycache__/
 .Python
 
 # 캘리브레이션 데이터 (용량이 크고 개인 환경마다 다름)
-*.npz
-calibration_result_*.yaml
-calibration_samples.npz
+# *.npz
+# calibration_result_*.yaml
+# calibration_samples.npz
 
 # IDE
 .vscode/
