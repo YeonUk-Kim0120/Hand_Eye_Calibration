@@ -18,9 +18,6 @@ setup(
         # launch 디렉토리 안의 .launch.py 파일들을 포함
         (os.path.join('share', package_name, 'launch'), 
             glob(os.path.join('launch', '*.launch.py'))),
-        # config 디렉토리 안의 .yaml 파일들을 포함
-        (os.path.join('share', package_name, 'config'), 
-            glob(os.path.join('config', '*.yaml'))),
         # scripts 디렉토리 안의 Python 스크립트들을 포함
         (os.path.join('share', package_name, 'scripts'), 
             glob(os.path.join('scripts', '*.py'))),

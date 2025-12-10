@@ -8,7 +8,7 @@
 
 * **체커보드 감지 (`checkerboard_detector_node`)**: ZED 2i 카메라의 이미지에서 체커보드를 감지하여 `T_cam_board` 변환을 `/camera_to_checkerboard` 토픽으로 발행합니다.
 * **TF to Pose 변환 (`tf_to_pose_publisher`)**: UR5e 로봇의 TF 정보(`/tf` 토픽)를 구독하여 `T_base_ee` 변환을 `/base_to_end_effector` 토픽으로 발행합니다.
-* **캘리브레이션 수집기 (`calibration_collector_node`)**: 위 두 토픽을 동기화하여 구독하고, 서비스 호출을 통해 샘플 쌍을 수집한 뒤, `cv2.calibrateRobotWorldHandEye` 함수를 이용해 최종 `T_base_cam` 변환 행렬을 계산합니다.
+* **캘리브레이션 수집기 (`calibration_collector_node`)**: 위 두 토픽을 동기화하여 구독하고, 서비스 호출을 통해 샘플 쌍을 수집한 뒤, `cv2.calibrateHandEye` 함수를 이용해 최종 `T_base_cam` 변환 행렬을 계산합니다 (easy_handeye2 방식: 로봇 transform을 역방향으로 입력).
 * **Mock Robot (테스트용)**: 실제 로봇 없이 테스트하기 위한 가상 로봇 노드가 포함되어 있습니다.
 
 ## 📦 사전 요구사항
@@ -69,7 +69,7 @@ source install/setup.bash
 
 ### 실행 단계
 
-#### **Terminal 1: ZED 카메라**
+#### **Terminal 1: ZED Wrapper 실행**
 ```bash
 source install/setup.bash
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
@@ -81,7 +81,7 @@ source install/setup.bash
 ros2 run hand_eye_calibration detector
 ```
 
-**파라미터 조정 (선택사항):**
+**파라미터 조정 명령어 (선택사항):**
 ```bash
 ros2 run hand_eye_calibration detector \
   --ros-args \
@@ -99,7 +99,7 @@ ros2 run hand_eye_calibration tf_to_pose \
   -p child_frame:=ur5e_tool0
 ```
 
-**참고:** Frame 이름은 로봇 설정에 따라 다를 수 있습니다. 다음 명령어로 확인:
+**참고:** Frame 이름은 로봇 설정에 따라 다를 수 있습니다.(일반적으론 base_link, tool0) 다음 명령어로 확인:
 ```bash
 ros2 run tf2_ros tf2_echo <parent_frame> <child_frame>
 ```
