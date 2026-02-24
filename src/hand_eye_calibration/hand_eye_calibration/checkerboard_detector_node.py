@@ -7,6 +7,7 @@ from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
+import time
 import message_filters
 from tf_transformations import quaternion_from_matrix
 
@@ -21,12 +22,14 @@ class CheckerboardDetectorNode(Node):
         self.declare_parameter('show_visualization', True)
         self.declare_parameter('max_reprojection_error', 1.0)  # 픽셀 단위
         self.declare_parameter('pnp_method', 'IPPE')  # ITERATIVE, IPPE, SQPNP
+        self.declare_parameter('processing_rate', 2.0)  # Hz - 초당 처리할 최대 프레임 수
 
         self.rows = self.get_parameter('checkerboard_rows').value
         self.cols = self.get_parameter('checkerboard_cols').value
         self.square_size = self.get_parameter('square_size').value
         self.show_viz = self.get_parameter('show_visualization').value
         self.max_reproj_error = self.get_parameter('max_reprojection_error').value
+        self.processing_rate = self.get_parameter('processing_rate').value
         
         # PnP 방법 선택
         pnp_method_str = self.get_parameter('pnp_method').value
@@ -35,8 +38,14 @@ class CheckerboardDetectorNode(Node):
         self.get_logger().info(f"Checkerboard settings: {self.rows}x{self.cols}, size: {self.square_size}m")
         self.get_logger().info(f"PnP method: {pnp_method_str}")
         self.get_logger().info(f"Max reprojection error: {self.max_reproj_error} pixels")
+        self.get_logger().info(f"Processing rate limit: {self.processing_rate} Hz")
         if self.show_viz:
             self.get_logger().info("Visualization enabled")
+        
+        # 프레임 처리 제한을 위한 변수
+        self._last_process_time = 0.0
+        self._min_process_interval = 1.0 / self.processing_rate  # 최소 처리 간격 (초)
+        self._is_processing = False  # 현재 처리 중인지 여부
         
         # 통계 추적
         self.detection_count = 0
@@ -75,6 +84,24 @@ class CheckerboardDetectorNode(Node):
         return methods.get(method_str.upper(), cv2.SOLVEPNP_ITERATIVE)
 
     def image_callback(self, img_msg, info_msg):
+        # 이전 프레임이 아직 처리 중이면 스킵 (프레임 드롭)
+        if self._is_processing:
+            return
+        
+        # 처리 속도 제한: 지정된 Hz 이상으로 처리하지 않음
+        current_time = time.monotonic()
+        if (current_time - self._last_process_time) < self._min_process_interval:
+            return
+        
+        self._is_processing = True
+        self._last_process_time = current_time
+        
+        try:
+            self._process_frame(img_msg, info_msg)
+        finally:
+            self._is_processing = False
+    
+    def _process_frame(self, img_msg, info_msg):
         # 카메라 정보 저장 (최초 1회)
         if self.camera_matrix is None:
             self.camera_matrix = np.array(info_msg.k).reshape(3, 3)
@@ -221,6 +248,9 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # OpenCV 윈도우 정리
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)  # destroyAllWindows가 실제로 적용되도록
         # 통계 출력
         if node.detection_count > 0:
             avg_error = node.total_error / node.detection_count

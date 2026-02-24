@@ -23,6 +23,13 @@ class CalibrationCollectorNode(Node):
         else:
             self.get_logger().warn(f"Workspace not found: {self.workspace_root}, using current directory")
 
+        # 캘리브레이션 타입 파라미터
+        self.declare_parameter('calibration_type', 'eye_on_base')  # 'eye_on_base' or 'eye_in_hand'
+        self.calibration_type = self.get_parameter('calibration_type').value
+        if self.calibration_type not in ('eye_on_base', 'eye_in_hand'):
+            self.get_logger().error(f"Invalid calibration_type: '{self.calibration_type}'. Must be 'eye_on_base' or 'eye_in_hand'.")
+            raise ValueError(f"Invalid calibration_type: '{self.calibration_type}'")
+
         # 샘플 저장 파일 경로 파라미터
         self.declare_parameter('samples_file', 'calibration_samples.npz')
         self.declare_parameter('auto_save', True)  # 각 캡처마다 자동 저장
@@ -64,6 +71,7 @@ class CalibrationCollectorNode(Node):
             self._load_samples()
 
         self.get_logger().info("Calibration collector node started (easy_handeye2 style).")
+        self.get_logger().info(f"Calibration type: {self.calibration_type}")
         self.get_logger().info(f"Samples file: {self.samples_file}")
         self.get_logger().info(f"Auto-save: {self.auto_save}, Load on start: {self.load_on_start}")
         self.get_logger().info(f"Currently loaded samples: {len(self.T_base_ee_list)}")
@@ -99,6 +107,7 @@ class CalibrationCollectorNode(Node):
         
         if self.last_base_ee_pose is None or self.last_cam_board_pose is None:
             self.get_logger().warn("No synchronized poses received yet. Cannot capture sample.")
+            self.lock = False
             return response
 
         # 현재 저장된 마지막 포즈를 4x4 행렬로 변환하여 리스트에 추가
@@ -127,121 +136,126 @@ class CalibrationCollectorNode(Node):
             self.get_logger().error(f"Need at least {min_samples} samples to run calibration. Currently have {len(self.T_base_ee_list)}.")
             return response
 
-        self.get_logger().info(f"Running Hand-Eye calibration with {len(self.T_base_ee_list)} samples...")
-        self.get_logger().info("🔧 Using easy_handeye2 approach: calibrateHandEye with inverted robot transform")
+        is_eye_on_base = (self.calibration_type == 'eye_on_base')
+        mode_str = 'Eye-on-Base' if is_eye_on_base else 'Eye-in-Hand'
 
-        # easy_handeye2 방식 Eye-to-Hand 캘리브레이션
-        # 
-        # 핵심 트릭: calibrateHandEye는 원래 Eye-in-Hand용이지만,
-        # 로봇 transform을 반대로 넣으면 Eye-on-Base에도 사용 가능!
-        # 
-        # calibrateHandEye 방정식: A * X = X * B
-        # 
-        # Eye-in-Hand (원래 용도):
-        #   A = T_base_ee (base → ee)
-        #   B = T_camera_board (camera → board)
-        #   X = T_ee_camera (ee → camera) - 구하는 값
-        # 
-        # Eye-on-Base (우리 케이스 - 트릭 적용!):
-        #   A = T_ee_base (ee → base) ⚡ 반대로 입력!
-        #   B = T_camera_board (camera → board)
-        #   X = T_base_camera (base → camera) - 구하는 값!
-        # 
-        # 왜 작동하는가?
-        #   T_ee_base * T_base_camera = T_base_camera * T_camera_board
-        #   역방향 transform을 넣으면 방정식이 여전히 성립하고,
-        #   결과가 base → camera가 됨!
+        self.get_logger().info(f"Running {mode_str} calibration with {len(self.T_base_ee_list)} samples...")
+
+        # cv2.calibrateHandEye는 AX = XB 를 풀어줌 (원래 Eye-in-Hand용)
+        #
+        # Eye-in-Hand:
+        #   A = T_base_ee (base → ee),  B = T_cam_board (cam → board)
+        #   → X = T_ee_cam (ee → camera)
+        #
+        # Eye-on-Base (트릭):
+        #   A = inv(T_base_ee) = T_ee_base,  B = T_cam_board
+        #   → X = T_base_cam (base → camera)
         
         try:
             # 입력 데이터 준비
-            R_ee_base_list = []  # ⚡ 역방향! (gripper → base)
-            t_ee_base_list = []
-            R_cam_board_list = []  # camera → board (그대로)
+            R_robot_list = []
+            t_robot_list = []
+            R_cam_board_list = []
             t_cam_board_list = []
             
             for T_base_ee, T_cam_board in zip(self.T_base_ee_list, self.T_cam_board_list):
-                # ⚡ T_base_ee를 반전 → T_ee_base (ee → base)
-                ###################################################################
-                T_ee_base = np.linalg.inv(T_base_ee)
-                R_ee_base_list.append(T_ee_base[:3, :3])
-                t_ee_base_list.append(T_ee_base[:3, 3].reshape(3, 1))
-                # 초간단 eye to base -> eye in hand 변환은 윗 코드 주석처리하기.
-
-                # R_ee_base_list.append(T_base_ee[:3, :3])  # 당연히 위에 리스트 이름도 바꿔주면 헷갈리지 않다.
-                # t_ee_base_list.append(T_base_ee[:3, 3].reshape(3, 1))
-                ###################################################################
+                if is_eye_on_base:
+                    # Eye-on-Base: 역방향 입력 (ee → base)
+                    T_robot = np.linalg.inv(T_base_ee)
+                else:
+                    # Eye-in-Hand: 그대로 입력 (base → ee)
+                    T_robot = T_base_ee
                 
-                # T_cam_board → R, t (camera → board, 그대로 사용)
+                R_robot_list.append(T_robot[:3, :3])
+                t_robot_list.append(T_robot[:3, 3].reshape(3, 1))
+                
                 R_cam_board_list.append(T_cam_board[:3, :3])
                 t_cam_board_list.append(T_cam_board[:3, 3].reshape(3, 1))
             
             # cv2.calibrateHandEye 호출
-            # - R_gripper2base: T_ee_base (역방향!)
-            # - R_target2cam: T_cam_board
-            # - 출력: R_cam2gripper → 실제로는 T_base_camera가 됨!
-            R_base_cam, t_base_cam = cv2.calibrateHandEye(
-                R_gripper2base=R_ee_base_list,  # ⚡ 역방향 입력!
-                t_gripper2base=t_ee_base_list,
+            R_result, t_result = cv2.calibrateHandEye(
+                R_gripper2base=R_robot_list,
+                t_gripper2base=t_robot_list,
                 R_target2cam=R_cam_board_list,
                 t_target2cam=t_cam_board_list,
                 method=cv2.CALIB_HAND_EYE_TSAI
             )
             
-            # 결과 조합
-            T_base_cam = np.eye(4)
-            T_base_cam[:3, :3] = R_base_cam
-            T_base_cam[:3, 3] = t_base_cam.flatten()
+            # 결과 4x4 행렬 조합
+            T_result = np.eye(4)
+            T_result[:3, :3] = R_result
+            T_result[:3, 3] = t_result.flatten()
             
-            # T_ee_board 계산 (검증용)
-            # T_cam_board = inv(T_base_cam) * T_base_ee * T_ee_board
-            # → T_ee_board = inv(T_base_ee) * T_base_cam * T_cam_board
-            T_ee_board_list = []
+            # 검증용 부수 변환 계산
+            # Eye-on-Base: T_cam_board = inv(T_base_cam) * T_base_ee * T_ee_board
+            #   → T_ee_board = inv(T_base_ee) * T_base_cam * T_cam_board
+            # Eye-in-Hand: T_cam_board = inv(T_ee_cam) * inv(T_base_ee) * T_base_board
+            #   → T_base_board = T_base_ee * T_ee_cam * T_cam_board
+            T_secondary_list = []
             for T_base_ee, T_cam_board in zip(self.T_base_ee_list, self.T_cam_board_list):
-                T_ee_base = np.linalg.inv(T_base_ee)
-                T_ee_board = np.dot(np.dot(T_ee_base, T_base_cam), T_cam_board)
-                T_ee_board_list.append(T_ee_board)
+                if is_eye_on_base:
+                    # T_ee_board = inv(T_base_ee) * T_base_cam * T_cam_board
+                    T_sec = np.linalg.inv(T_base_ee) @ T_result @ T_cam_board
+                else:
+                    # T_base_board = T_base_ee * T_ee_cam * T_cam_board
+                    T_sec = T_base_ee @ T_result @ T_cam_board
+                T_secondary_list.append(T_sec)
             
-            # 평균 T_ee_board 계산 (일관성 검증)
-            T_ee_board_avg = np.mean(T_ee_board_list, axis=0)
-            R_ee_board = T_ee_board_avg[:3, :3]
-            t_ee_board = T_ee_board_avg[:3, 3].reshape(3, 1)
+            T_secondary_avg = np.mean(T_secondary_list, axis=0)
+            R_secondary = T_secondary_avg[:3, :3]
+            t_secondary = T_secondary_avg[:3, 3].reshape(3, 1)
             
-            # 검증: T_cam_board = inv(T_base_cam) * T_base_ee * T_ee_board
+            # Residual 검증
             residuals = []
             for T_base_ee, T_cam_board in zip(self.T_base_ee_list, self.T_cam_board_list):
-                T_cam_base = np.linalg.inv(T_base_cam)
+                if is_eye_on_base:
+                    # 우변: inv(T_base_cam) * T_base_ee * T_ee_board_avg
+                    T_cam_board_computed = np.linalg.inv(T_result) @ T_base_ee @ T_secondary_avg
+                else:
+                    # 우변: inv(T_ee_cam) * inv(T_base_ee) * T_base_board_avg
+                    T_cam_board_computed = np.linalg.inv(T_result) @ np.linalg.inv(T_base_ee) @ T_secondary_avg
                 
-                # 좌변: T_cam_board (실제 측정값)
-                # 우변: inv(T_base_cam) * T_base_ee * T_ee_board_avg
-                T_cam_board_computed = np.dot(np.dot(T_cam_base, T_base_ee), T_ee_board_avg)
-                
-                # 차이 계산 (translation 부분만)
                 residual = np.linalg.norm(T_cam_board[:3, 3] - T_cam_board_computed[:3, 3])
                 residuals.append(residual)
 
+            # 쿼터니언 계산
+            q_result = tf_transformations.quaternion_from_matrix(T_result)
+            q_secondary = tf_transformations.quaternion_from_matrix(T_secondary_avg)
+
+            # 모드별 라벨 설정
+            if is_eye_on_base:
+                result_name = 'T_base_cam'
+                result_desc = 'Robot Base → Camera (camera is fixed)'
+                secondary_name = 'T_ee_board'
+                secondary_desc = 'End-Effector → Checkerboard (board on EE)'
+                eq_str = 'T_cam_board = inv(T_base_cam) * T_base_ee * T_ee_board'
+                yaml_type = 'Eye-on-Base'
+                yaml_desc = 'Camera fixed, board on EE. calibrateHandEye with inv(T_base_ee).'
+            else:
+                result_name = 'T_ee_cam'
+                result_desc = 'End-Effector → Camera (camera on EE)'
+                secondary_name = 'T_base_board'
+                secondary_desc = 'Robot Base → Checkerboard (board is fixed)'
+                eq_str = 'T_cam_board = inv(T_ee_cam) * inv(T_base_ee) * T_base_board'
+                yaml_type = 'Eye-in-Hand'
+                yaml_desc = 'Camera on EE, board fixed. calibrateHandEye with T_base_ee directly.'
+
             # 결과 출력
             self.get_logger().info("=" * 60)
-            self.get_logger().info("=== Eye-to-Hand Calibration Results (easy_handeye2 style) ===")
+            self.get_logger().info(f"=== {mode_str} Calibration Results ===")
             self.get_logger().info("=" * 60)
             self.get_logger().info("")
-            self.get_logger().info("🎯 T_base_cam (Robot Base → Camera) - PRIMARY RESULT")
-            self.get_logger().info(f"   This is the fixed transformation you need!")
-            self.get_logger().info(f"   Translation (xyz) [m]: [{t_base_cam[0][0]:.6f}, {t_base_cam[1][0]:.6f}, {t_base_cam[2][0]:.6f}]")
-            
-            # 쿼터니언 계산
-            q_base_cam = tf_transformations.quaternion_from_matrix(T_base_cam)
-            self.get_logger().info(f"   Orientation (xyzw): [{q_base_cam[0]:.6f}, {q_base_cam[1]:.6f}, {q_base_cam[2]:.6f}, {q_base_cam[3]:.6f}]")
+            self.get_logger().info(f"🎯 {result_name} ({result_desc}) - PRIMARY RESULT")
+            self.get_logger().info(f"   Translation (xyz) [m]: [{t_result[0][0]:.6f}, {t_result[1][0]:.6f}, {t_result[2][0]:.6f}]")
+            self.get_logger().info(f"   Orientation (xyzw): [{q_result[0]:.6f}, {q_result[1]:.6f}, {q_result[2]:.6f}, {q_result[3]:.6f}]")
             self.get_logger().info("")
-            self.get_logger().info(f"   Homogeneous Matrix:\n{T_base_cam}")
+            self.get_logger().info(f"   Homogeneous Matrix:\n{T_result}")
             self.get_logger().info("")
             
-            # T_ee_board 검증 정보
-            q_ee_board = tf_transformations.quaternion_from_matrix(T_ee_board_avg)
-            self.get_logger().info("📋 T_ee_board (End-Effector → Checkerboard) - VERIFICATION")
-            self.get_logger().info(f"   This should be constant (checkerboard mounting)")
-            self.get_logger().info(f"   Translation (xyz) [m]: [{t_ee_board[0][0]:.6f}, {t_ee_board[1][0]:.6f}, {t_ee_board[2][0]:.6f}]")
-            self.get_logger().info(f"   Orientation (xyzw): [{q_ee_board[0]:.6f}, {q_ee_board[1]:.6f}, {q_ee_board[2]:.6f}, {q_ee_board[3]:.6f}]")
-            self.get_logger().info(f"   (computed from avg of all samples)")
+            self.get_logger().info(f"📋 {secondary_name} ({secondary_desc}) - VERIFICATION")
+            self.get_logger().info(f"   This should be constant across all samples.")
+            self.get_logger().info(f"   Translation (xyz) [m]: [{t_secondary[0][0]:.6f}, {t_secondary[1][0]:.6f}, {t_secondary[2][0]:.6f}]")
+            self.get_logger().info(f"   Orientation (xyzw): [{q_secondary[0]:.6f}, {q_secondary[1]:.6f}, {q_secondary[2]:.6f}, {q_secondary[3]:.6f}]")
             self.get_logger().info("")
             
             # 일관성 검증: residual 통계
@@ -251,7 +265,7 @@ class CalibrationCollectorNode(Node):
                 max_residual = np.max(residuals_array)
                 
                 self.get_logger().info("📊 Consistency Check (Equation Residuals):")
-                self.get_logger().info(f"   T_cam_board = inv(T_base_cam) * T_base_ee * T_ee_board")
+                self.get_logger().info(f"   {eq_str}")
                 self.get_logger().info(f"   Mean residual [mm]: {mean_residual*1000:.3f}")
                 self.get_logger().info(f"   Max residual [mm]: {max_residual*1000:.3f}")
                 
@@ -264,46 +278,47 @@ class CalibrationCollectorNode(Node):
                 self.get_logger().info("")
             
             self.get_logger().info("=" * 60)
+
             # 결과를 YAML 파일로 저장
             result_data = {
                 'calibration_result': {
                     'timestamp': datetime.now().isoformat(),
                     'num_samples': len(self.T_base_ee_list),
-                    'method': 'CALIB_HAND_EYE_TSAI (easy_handeye2 style)',
-                    'calibration_type': 'Eye-to-Hand',
-                    'description': 'Camera fixed, robot moves with checkerboard on end-effector. Using calibrateHandEye with inverted robot transform.',
-                    'T_base_cam': {
-                        'description': 'Transformation from robot base to camera (what we want!)',
+                    'method': 'CALIB_HAND_EYE_TSAI',
+                    'calibration_type': yaml_type,
+                    'description': yaml_desc,
+                    result_name: {
+                        'description': result_desc,
                         'translation': {
-                            'x': float(t_base_cam[0][0]),
-                            'y': float(t_base_cam[1][0]),
-                            'z': float(t_base_cam[2][0])
+                            'x': float(t_result[0][0]),
+                            'y': float(t_result[1][0]),
+                            'z': float(t_result[2][0])
                         },
                         'rotation_quaternion': {
-                            'x': float(q_base_cam[0]),
-                            'y': float(q_base_cam[1]),
-                            'z': float(q_base_cam[2]),
-                            'w': float(q_base_cam[3])
+                            'x': float(q_result[0]),
+                            'y': float(q_result[1]),
+                            'z': float(q_result[2]),
+                            'w': float(q_result[3])
                         },
-                        'rotation_matrix': R_base_cam.tolist(),
-                        'homogeneous_matrix': T_base_cam.tolist()
+                        'rotation_matrix': R_result.tolist(),
+                        'homogeneous_matrix': T_result.tolist()
                     },
-                    'T_ee_board': {
-                        'description': 'Transformation from end-effector to checkerboard (verification)',
+                    secondary_name: {
+                        'description': secondary_desc,
                         'translation': {
-                            'x': float(t_ee_board[0][0]),
-                            'y': float(t_ee_board[1][0]),
-                            'z': float(t_ee_board[2][0])
+                            'x': float(t_secondary[0][0]),
+                            'y': float(t_secondary[1][0]),
+                            'z': float(t_secondary[2][0])
                         },
                         'rotation_quaternion': {
-                            'x': float(q_ee_board[0]),
-                            'y': float(q_ee_board[1]),
-                            'z': float(q_ee_board[2]),
-                            'w': float(q_ee_board[3])
+                            'x': float(q_secondary[0]),
+                            'y': float(q_secondary[1]),
+                            'z': float(q_secondary[2]),
+                            'w': float(q_secondary[3])
                         },
-                        'rotation_matrix': R_ee_board.tolist(),
-                        'homogeneous_matrix': T_ee_board_avg.tolist(),
-                        'note': 'This should be consistent across all samples (checkerboard mounting). Computed as average.'
+                        'rotation_matrix': R_secondary.tolist(),
+                        'homogeneous_matrix': T_secondary_avg.tolist(),
+                        'note': 'Should be consistent across all samples. Computed as average.'
                     }
                 }
             }
