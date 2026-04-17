@@ -119,7 +119,7 @@ ros2 run hand_eye_calibration collector --ros-args -p calibration_type:=eye_in_h
 ```
 
 ### 샘플 수집 및 캘리브레이션
-
+#### 단위는 m(미터) 
 #### **1. 샘플 수집 (10-20개 권장)**
 
 로봇을 첫 번째 위치로 이동 → 정지 → 다음 명령 실행:

@@ -15,8 +15,9 @@ class CalibrationCollectorNode(Node):
     def __init__(self):
         super().__init__('calibration_collector_node')
 
-        # 작업 디렉토리를 프로젝트 루트로 설정
+        # 작업 디렉토리를 프로젝트 루트로 설정###########################################
         self.workspace_root = os.path.expanduser('~/Desktop/Hand_Eye_Calibration')
+        ##############################################################################
         if os.path.exists(self.workspace_root):
             os.chdir(self.workspace_root)
             self.get_logger().info(f"Working directory: {self.workspace_root}")
@@ -95,12 +96,31 @@ class CalibrationCollectorNode(Node):
             pose.orientation.w
         ]
         t = [pose.position.x, pose.position.y, pose.position.z]
-        
+
         rotation_matrix = tf_transformations.quaternion_matrix(q)
         translation_matrix = tf_transformations.translation_matrix(t)
-        
+
         # T = T_trans * T_rot
         return np.dot(translation_matrix, rotation_matrix)
+
+    def _average_transforms(self, T_list):
+        """4x4 변환 행렬들을 평균한다.
+        Translation은 산술평균, rotation은 쿼터니언 평균(부호 정렬 후 정규화)으로
+        계산해 결과가 항상 유효한 SE(3) 원소가 되도록 한다."""
+        Ts = np.asarray(T_list)  # (N, 4, 4)
+
+        t_avg = Ts[:, :3, 3].mean(axis=0)
+
+        quats = np.array([tf_transformations.quaternion_from_matrix(T) for T in Ts])
+        # q와 -q는 같은 회전이므로, 첫 샘플 기준으로 같은 반구에 맞춤
+        dots = quats @ quats[0]
+        quats = np.where(dots[:, None] < 0, -quats, quats)
+        q_avg = quats.mean(axis=0)
+        q_avg /= np.linalg.norm(q_avg)
+
+        T_avg = tf_transformations.quaternion_matrix(q_avg)
+        T_avg[:3, 3] = t_avg
+        return T_avg
 
     def capture_sample_callback(self, request, response):
         self.lock = True # 데이터 복사 중 덮어쓰기 방지
@@ -201,7 +221,7 @@ class CalibrationCollectorNode(Node):
                     T_sec = T_base_ee @ T_result @ T_cam_board
                 T_secondary_list.append(T_sec)
             
-            T_secondary_avg = np.mean(T_secondary_list, axis=0)
+            T_secondary_avg = self._average_transforms(T_secondary_list)
             R_secondary = T_secondary_avg[:3, :3]
             t_secondary = T_secondary_avg[:3, 3].reshape(3, 1)
             
