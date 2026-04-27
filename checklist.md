@@ -1,3 +1,6 @@
+  ### numpy 버전 문제
+  pip install "numpy==1.26.4"
+  ###
 🔴 CRITICAL: 기존 .npz 샘플이 자동 로드됨 (가장 놓치기 쉬운 함정)
 
   현재 워크스페이스에 calibration_samples_eye_on_base.npz가 이미 있고,
@@ -26,11 +29,11 @@
 #############################################################################
   🔴 CRITICAL: ZED 토픽명이 하드코딩됨
 #############################################################################
-  checkerboard_detector_node.py:68-69:
+  checkerboard_detector_node.py:68-69 (zed-ros2-wrapper 신버전 토픽명):
   image_sub = message_filters.Subscriber(self, Image,
-  '/zed/zed_node/rgb/image_rect_color')
+  '/zed/zed_node/rgb/color/rect/image')
   info_sub = message_filters.Subscriber(self, CameraInfo,
-  '/zed/zed_node/rgb/camera_info')
+  '/zed/zed_node/rgb/color/rect/camera_info')
   파라미터로 바꿀 수 없습니다. 현장 ZED wrapper 네임스페이스가 다르면
   detector가 영원히 대기합니다. 대책:
 
@@ -39,12 +42,12 @@
 
   # 다르면 remap
   ros2 run hand_eye_calibration detector --ros-args \
-    -r /zed/zed_node/rgb/image_rect_color:=<실제_이미지_토픽> \
-    -r /zed/zed_node/rgb/camera_info:=<실제_info_토픽>
+    -r /zed/zed_node/rgb/color/rect/image:=<실제_이미지_토픽> \
+    -r /zed/zed_node/rgb/color/rect/camera_info:=<실제_info_토픽>
 
-  반드시 image_rect_color (rectified) 를 써야 합니다. image_color
-  (raw)를 쓰면 ZED wrapper가 D 벡터를 0으로 주더라도 실제 영상엔 왜곡이
-  남아있어서 solvePnP 결과가 망가집니다.
+  반드시 rectified 이미지(`.../rect/image`) 를 써야 합니다. raw 이미지를
+  쓰면 ZED wrapper가 D 벡터를 0으로 주더라도 실제 영상엔 왜곡이 남아있어서
+  solvePnP 결과가 망가집니다.
 
   🔴 CRITICAL: 체커보드 파라미터 현장 것과 일치 확인
 

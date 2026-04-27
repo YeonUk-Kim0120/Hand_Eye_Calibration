@@ -65,8 +65,8 @@ class CheckerboardDetectorNode(Node):
         self.pose_publisher = self.create_publisher(PoseStamped, '/camera_to_checkerboard', 10)
 
         # 이미지와 카메라 정보를 동기화하여 구독
-        image_sub = message_filters.Subscriber(self, Image, '/zed/zed_node/rgb/image_rect_color')
-        info_sub = message_filters.Subscriber(self, CameraInfo, '/zed/zed_node/rgb/camera_info')
+        image_sub = message_filters.Subscriber(self, Image, '/zed/zed_node/rgb/color/rect/image')
+        info_sub = message_filters.Subscriber(self, CameraInfo, '/zed/zed_node/rgb/color/rect/camera_info')
 
         self.ts = message_filters.ApproximateTimeSynchronizer([image_sub, info_sub], 10, 0.1)
         self.ts.registerCallback(self.image_callback)
@@ -259,7 +259,8 @@ def main(args=None):
             node.get_logger().info(f"Rejected (high error): {node.rejection_count}")
             node.get_logger().info(f"Average reprojection error: {avg_error:.4f} pixels")
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

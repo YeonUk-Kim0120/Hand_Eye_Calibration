@@ -224,4 +224,14 @@ ros2 service call /capture_sample std_srvs/srv/Empty
 # 3) 포즈를 다시 변경하고 캡처를 반복 (최소 10회)
 ```
 
+## 검증 모드
+#### 사전: ZED + UR driver + (선택) detector 모두 켜진 상태에서                         
+source install/setup.bash                                                              
+                                                                                         
+#### 가장 최신 calibration_result_*.yaml 자동 선택                                        
+ros2 run hand_eye_calibration verify                                                   
+                                                                                         
+#### 특정 YAML 지정하려면                                                               
+ros2 run hand_eye_calibration verify --ros-args \ -p calibration_file:=/home/kist/Desktop/Hand_Eye_Calibration/calibration_result_20251210_112241.yaml 
+
 **참고:** Mock robot은 실제 로봇처럼 TF를 발행하므로 tf_to_pose와 함께 사용해야 합니다.

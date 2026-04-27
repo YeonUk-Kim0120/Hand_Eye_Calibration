@@ -67,7 +67,7 @@ Declared as ROS 2 parameters — override with `--ros-args -p <name>:=<value>`.
 - All transforms are stored and manipulated as 4x4 NumPy homogeneous matrices. Quaternion order is `(x, y, z, w)` everywhere (ROS convention).
 - Pose-to-matrix conversion uses `tf_transformations.quaternion_matrix` + `translation_matrix` composed as `T = T_trans @ T_rot`.
 - The collector hardcodes its working directory to `~/Desktop/Hand_Eye_Calibration` for output files. It **auto-loads `calibration_samples.npz` on startup** (`load_on_start=True`) — to begin a fresh session, delete or rename the `.npz` file, or pass `-p load_on_start:=false`.
-- Image/info topics are hardcoded to `/zed/zed_node/rgb/image_rect_color` and `/zed/zed_node/rgb/camera_info`; the detector also hardcodes `camera_frame_id="zed_left_camera_optical_frame"` on its published `PoseStamped`.
+- Image/info topics are hardcoded to `/zed/zed_node/rgb/color/rect/image` and `/zed/zed_node/rgb/color/rect/camera_info` (zed-ros2-wrapper post-rename); the detector also hardcodes `camera_frame_id="zed_left_camera_optical_frame"` on its published `PoseStamped`.
 - TF frame names default to `ur5e_base_link` and `ur5e_tool0` — these vary by UR robot configuration.
 
 ## Dependencies

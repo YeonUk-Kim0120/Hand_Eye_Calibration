@@ -141,7 +141,8 @@ def main(args=None):
         pass
     finally:
         validator.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
