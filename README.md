@@ -230,8 +230,8 @@ source install/setup.bash
                                                                                          
 #### 가장 최신 calibration_result_*.yaml 자동 선택                                        
 ros2 run hand_eye_calibration verify                                                   
-                                                                                         
+
 #### 특정 YAML 지정하려면                                                               
-ros2 run hand_eye_calibration verify --ros-args \ -p calibration_file:=/home/kist/Desktop/Hand_Eye_Calibration/calibration_result_20251210_112241.yaml 
+ros2 run hand_eye_calibration verify --ros-args -p calibration_file:=/home/kist/Desktop/Hand_Eye_Calibration/calibration_result_20251210_112241.yaml
 
 **참고:** Mock robot은 실제 로봇처럼 TF를 발행하므로 tf_to_pose와 함께 사용해야 합니다.

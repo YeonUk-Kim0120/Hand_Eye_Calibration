@@ -45,7 +45,7 @@ class VerificationNode(Node):
         self.declare_parameter('move_accel', 0.1)          # m/s^2
         self.declare_parameter('stop_decel', 2.0)          # m/s^2
         self.declare_parameter('reach_min', 0.20)          # m, base 원점에서 거리
-        self.declare_parameter('reach_max', 0.85)          # m
+        self.declare_parameter('reach_max', 3.85)          # m
         self.declare_parameter('z_min', 0.0)               # m, base frame 최소 z
         self.declare_parameter('rx', 3.14159)              # axis-angle (top-down)
         self.declare_parameter('ry', 0.0)
@@ -365,7 +365,7 @@ class VerificationNode(Node):
             self.get_logger().info("Reset.")
         elif key == ord('q'):
             self.get_logger().info("Quit requested.")
-            rclpy.shutdown()
+            raise KeyboardInterrupt
 
 
 def main(args=None):
