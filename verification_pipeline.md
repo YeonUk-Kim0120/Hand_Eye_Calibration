@@ -47,6 +47,7 @@ chmod -R a+rwx ~/ursim
 
 ```bash
 docker run --rm -d --name ursim \
+  --privileged \
   -p 5900:5900 \
   -p 6080:6080 \
   -p 29999:29999 \
@@ -59,6 +60,12 @@ docker run --rm -d --name ursim \
 ```
 
 **중요: `--net=host` 쓰지 말 것.** 호스트의 X server abstract socket과 충돌해서 컨테이너 내부 X 부팅 실패 → noVNC가 응답 안 함. 위처럼 명시적 포트 매핑이 안전.
+
+**`--privileged` 빠뜨리면** URControl(컨트롤러 백엔드)가 부팅 중 TCP 소켓 생성 실패(`errno 38 ENOSYS`)로 즉시 죽고, PolyScope에 **NO CONTROLLER** 빨간 박스가 뜬다. Linux 6.x 커널 + Docker default seccomp 조합에서 일부 socket syscall이 막혀 생기는 증상. 진단법:
+```bash
+docker exec ursim ps -ef | grep URControl | grep -v grep   # 빈 결과면 죽은 상태
+docker exec ursim tail -20 /ursim/URControl.log            # Socket::create() failed 라인 확인
+```
 
 부팅 30초 정도 기다린 뒤 브라우저에서:
 ```
@@ -104,6 +111,8 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 [INFO] Starting controllers
 ```
 RViz 창이 뜨고 UR5e 모델이 home 자세로 표시됨.
+
+**RViz 첫 화면에서 frame 에러가 빨갛게 나오면**: 좌측 패널 `Global Options → Fixed Frame`을 default `base_link`에서 **`ur5e_base_link`**로 변경. driver를 `tf_prefix:=ur5e_`로 띄웠으니 모든 frame이 `ur5e_` 접두사를 갖는데 RViz default가 빈 prefix라 frame mismatch가 생긴다. 한 번 바꾸고 `File → Save Config`로 저장하면 다음부터 유지.
 
 > `tf_prefix:=ur5e_`를 안 주면 frame 이름이 `base`/`tool0`이 되어 현장 환경과 다르고, 그러면 verify_node 실행 시 `-p base_frame:=base -p ee_frame:=tool0`을 매번 명시해야 한다. **driver launch에 prefix 한 번 붙이는 게 훨씬 단순.**
 
@@ -163,6 +172,25 @@ ros2 run hand_eye_calibration verify --ros-args \
   -p base_frame:=base \
   -p ee_frame:=tool0          # ← driver의 실제 frame 이름에 맞춰 명시
 ```
+
+#### Rz(π) 자동 변환 (REP-103 ↔ UR controller base)
+
+캘리브레이션은 ROS REP-103 frame인 `ur5e_base_link`(X+ 정면)에서 진행되지만, URScript `movel`은 UR controller 내부 frame `ur5e_base`(X+ 후면)에서 pose를 해석한다. 두 frame은 Z축 기준 180° 회전 관계.
+
+verify_node는 시작 시 `base_frame` 파라미터를 검사해 자동으로 변환 여부를 결정한다:
+- `base_frame`이 `*base_link`로 끝나면 → **flip=True** (위치·자세 모두 `Rz(π)` 좌측곱 적용 후 송신)
+- `*base`이거나 비표준이면 → **flip=False** (이미 UR-native 기준이라 가정)
+
+기동 시 로그에서 어느 모드인지 확인:
+```
+[INFO] base_frame='ur5e_base_link' ends with 'base_link' → Rz(π) will be applied before URScript movel (REP-103 → UR base frame).
+```
+
+매 이동 명령마다 변환 전후 좌표가 함께 로그된다:
+```
+src=(+0.3000,+0.2000,+0.4000) → sent=(-0.3000,-0.2000,+0.4000)  flip=True  Sent: movel(p[-0.3000,-0.2000,0.4500,0.0000,3.1416,0.0000], a=0.1, v=0.05)
+```
+→ `src`(base_link 기준 좌표) 부호가 반전되어 `sent`(base 기준 좌표)로 보내지면 정상. `flip=False`로 보이면 base_frame 파라미터가 base_link로 끝나는지 확인.
 
 > URSim에서는 캘리브레이션이 합성 데이터(예: Dec 10 mock)거나 카메라가 base에서 0.85m 이상 떨어졌으면
 > URControl이 `Protective Stop (C204A2: Path sanity check failed)` 띄우고 정지한다.
@@ -326,13 +354,16 @@ driver를 `tf_prefix:=ur5e_`로 띄웠으니 verify_node default(`ur5e_base_link
 
 | 증상 | 가능 원인 | 점검 |
 |---|---|---|
+| PolyScope에 **NO CONTROLLER** 빨간 박스 | URControl 데몬이 socket() 실패로 죽음 (커널/seccomp) | `docker logs ursim`에 `Socket::create() failed, errno 38`. 컨테이너 재기동 시 `--privileged` 플래그 추가 |
+| RViz에 `Frame [base_link] does not exist` + 모든 link 빨간 X | driver를 `tf_prefix:=ur5e_`로 띄웠는데 RViz Fixed Frame이 default `base_link` | RViz 좌측 `Global Options → Fixed Frame`을 `ur5e_base_link`로 변경 |
 | `urscript_interface` 토픽 안 보임 | driver 미실행 또는 ROS_DOMAIN_ID 불일치 | PC1/PC2 둘 다 `echo $ROS_DOMAIN_ID` |
 | `tf2_echo ur5e_base_link ur5e_tool0` 실패 | driver 미연결 또는 robot Power off | PolyScope/teach pendant 좌하단 Normal 확인 |
 | Protective Stop C204A2 | 목표점이 작업영역 밖 | `Enable Robot` 클릭 → 캘리브레이션 또는 reach 파라미터 점검 |
 | `frame ur5e_base_link does not exist` (Eye-in-Hand) | driver를 `tf_prefix:=ur5e_` 없이 띄움 | driver launch에 `tf_prefix:=ur5e_` 추가하거나, verify_node에 `-p base_frame:=base -p ee_frame:=tool0` 명시 |
 | `NoClassDefFoundError` (URCap 모드) | URCap 1.0.5 ↔ PolyScope 새 버전 비호환 | URSim 5.18 이하 사용 또는 headless 모드로 우회 |
 | Insufficient depth 0/9 (verify) | ZED depth 노이즈 (무늬 없는 표면) | 무늬/광원 양호한 표면 클릭 |
-| EE가 엉뚱한 곳 1m+ 어긋남 | frame 혼동 (optical vs ROS) 또는 캘리브레이션 자체 오류 | YAML의 T_base_cam translation을 줄자로 sanity check |
+| EE가 base_link 기준 정확히 **반대편**(X,Y 부호 반전)으로 이동 | `flip=False` 로그 + base_frame이 `*base_link`가 아님 | verify_node `base_frame` 파라미터 확인, default(`ur5e_base_link`) 사용 권장 |
+| EE가 엉뚱한 곳 1m+ 어긋남 (방향 반전과는 다른 종류) | frame 혼동 (optical vs ROS) 또는 캘리브레이션 자체 오류 | YAML의 T_base_cam translation을 줄자로 sanity check |
 | 클릭 후 Enter 눌렀는데 무반응 | Remote Control 모드 아님 또는 driver 끊김 | PolyScope 우상단 Remote 확인, driver 콘솔 확인 |
 
 ---
@@ -340,8 +371,9 @@ driver를 `tf_prefix:=ur5e_`로 띄웠으니 verify_node default(`ur5e_base_link
 ## 5. 빠른 참조 (시뮬 1회 검증, 명령 모음)
 
 ```bash
-# 1. URSim 시작
-docker run --rm -d --name ursim -p 5900:5900 -p 6080:6080 -p 29999:29999 -p 30001-30004:30001-30004 \
+# 1. URSim 시작 (--privileged 필수, 안 그러면 NO CONTROLLER)
+docker run --rm -d --name ursim --privileged \
+  -p 5900:5900 -p 6080:6080 -p 29999:29999 -p 30001-30004:30001-30004 \
   -v "$HOME/ursim/programs:/ursim/programs" -v "$HOME/ursim/urcaps:/urcaps" \
   -v "$HOME/ursim/dot_polyscope:/ursim/.polyscope" -v "$HOME/ursim/dot_urcaps:/ursim/.urcaps" \
   universalrobots/ursim_e-series:5.18
@@ -354,12 +386,14 @@ source /opt/ros/humble/setup.bash
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e robot_ip:=127.0.0.1 headless_mode:=true launch_rviz:=true \
   tf_prefix:=ur5e_
+# RViz 뜨면 Global Options → Fixed Frame: ur5e_base_link 로 변경
 
 # 4. ZED wrapper (터미널 B) — 별도 ZED 워크스페이스에서
 source ~/zed_ws/install/setup.bash
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 
 # 5. verify (터미널 C) — frame 옵션 불필요 (default가 driver와 일치)
+#   기동 로그에 "flip=True" 떠야 정상 (Rz(π) 자동 변환 적용)
 source ~/Desktop/Hand_Eye_Calibration/install/setup.bash
 ros2 run hand_eye_calibration verify --ros-args \
   -p calibration_file:=<YAML 경로>
@@ -373,6 +407,7 @@ ros2 run hand_eye_calibration verify --ros-args \
 
 ```bash
 docker run --rm -d --name ursim \
+  --privileged \
   -p 5900:5900 -p 6080:6080 -p 29999:29999 -p 30001-30004:30001-30004 \
   -v "$HOME/ursim/programs:/ursim/programs" \
   -v "$HOME/ursim/urcaps:/urcaps" \
@@ -381,10 +416,16 @@ docker run --rm -d --name ursim \
   universalrobots/ursim_e-series:5.18
 ```
 
+**`--privileged` 필수.** 빠뜨리면 URControl이 socket 생성 실패로 죽어 PolyScope에 NO CONTROLLER 박스가 뜬다 (1-2 참고).
+
 부팅 확인 (30~60초):
 ```bash
 nc -zv 127.0.0.1 5900 && nc -zv 127.0.0.1 30002
 # 둘 다 succeeded 나오면 OK
+
+# URControl이 정상 부팅됐는지 (이게 죽어있으면 NO CONTROLLER)
+docker exec ursim ps -ef | grep URControl | grep -v grep
+# /ursim/URControl ... 한 줄 나오면 OK
 ```
 
 ### 브라우저 — PolyScope 접속
@@ -415,6 +456,8 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 > **`tf_prefix:=ur5e_` 빠지면 verify_node frame 안 맞아서 에러난다.**
 
 성공 신호: `[INFO] Connected to robot`, RViz에 UR5e 모델.
+
+**RViz에서 link들이 빨간색이고 `Frame [base_link] does not exist`가 보이면**: 좌측 `Global Options → Fixed Frame`을 `ur5e_base_link`로 변경. 한 번 바꾸고 `File → Save Config` 누르면 다음에도 유지.
 
 ### 터미널 3 (선택) — URScript sanity
 
@@ -448,7 +491,17 @@ ros2 run hand_eye_calibration verify --ros-args \
 - `reach_max:=3.85`: Dec 10 합성 캘리브레이션은 카메라가 base에서 1m+ 떨어진 위치로 잡혀있어 클릭 좌표가 0.85m 넘으니 임시로 풀어둠. URControl이 작업영역 밖이면 Protective Stop 발생 (정상)
 - frame 옵션 안 줘도 됨 (default `ur5e_base_link`/`ur5e_tool0`이 driver tf_prefix와 일치)
 
-GUI 윈도우 뜨면 클릭 → Enter → URSim 가상 팔 움직임 또는 Protective Stop 관찰.
+기동 로그에서 확인:
+```
+[INFO] base_frame='ur5e_base_link' ends with 'base_link' → Rz(π) will be applied before URScript movel (REP-103 → UR base frame).
+```
+→ `flip=True` 모드 활성. 이게 안 보이면 base_frame 파라미터 점검.
+
+GUI 윈도우 뜨면 클릭 → Enter → 콘솔에 다음 형식의 로그 확인:
+```
+src=(+x_bl,+y_bl,+z_bl) → sent=(-x_bl,-y_bl,+z_bl)  flip=True  Sent: movel(...)
+```
+→ URSim 가상 팔이 base_link 기준으로 의도한 방향으로 움직이거나, 작업영역 밖이면 Protective Stop 발생.
 
 ### 종료
 
@@ -460,8 +513,9 @@ docker stop ursim
 ### 한 페이지 요약 (복사용)
 
 ```bash
-# 1. URSim
-docker run --rm -d --name ursim -p 5900:5900 -p 6080:6080 -p 29999:29999 -p 30001-30004:30001-30004 \
+# 1. URSim  (--privileged 필수)
+docker run --rm -d --name ursim --privileged \
+  -p 5900:5900 -p 6080:6080 -p 29999:29999 -p 30001-30004:30001-30004 \
   -v "$HOME/ursim/programs:/ursim/programs" -v "$HOME/ursim/urcaps:/urcaps" \
   -v "$HOME/ursim/dot_polyscope:/ursim/.polyscope" -v "$HOME/ursim/dot_urcaps:/ursim/.urcaps" \
   universalrobots/ursim_e-series:5.18
@@ -473,12 +527,13 @@ docker run --rm -d --name ursim -p 5900:5900 -p 6080:6080 -p 29999:29999 -p 3000
 source /opt/ros/humble/setup.bash
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e robot_ip:=127.0.0.1 headless_mode:=true launch_rviz:=true tf_prefix:=ur5e_
+# RViz: Global Options → Fixed Frame → ur5e_base_link (default base_link → 변경)
 
 # 3. ZED
 source ~/zed_ws/install/setup.bash
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 
-# 4. verify
+# 4. verify (기동 로그에 "flip=True" 떠야 정상)
 cd ~/Desktop/Hand_Eye_Calibration && source install/setup.bash
 ros2 run hand_eye_calibration verify --ros-args \
   -p calibration_file:=$(pwd)/calibration_result_20251210_112241.yaml \

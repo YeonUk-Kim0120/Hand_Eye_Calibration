@@ -45,7 +45,7 @@ class VerificationNode(Node):
         self.declare_parameter('move_accel', 0.1)          # m/s^2
         self.declare_parameter('stop_decel', 2.0)          # m/s^2
         self.declare_parameter('reach_min', 0.20)          # m, base 원점에서 거리
-        self.declare_parameter('reach_max', 3.85)          # m
+        self.declare_parameter('reach_max', 0.85)          # m
         self.declare_parameter('z_min', 0.0)               # m, base frame 최소 z
         self.declare_parameter('rx', 3.14159)              # axis-angle (top-down)
         self.declare_parameter('ry', 0.0)
@@ -67,11 +67,26 @@ class VerificationNode(Node):
         self.base_frame = self.get_parameter('base_frame').value
         self.ee_frame = self.get_parameter('ee_frame').value
 
+        # URScript movel은 UR controller native 'base' frame (X+ backward)에서
+        # pose를 해석. ROS REP-103 'base_link' (X+ forward)와는 Z축 180° 회전 관계.
+        # base_frame이 '*base_link'면 송신 직전 Rz(π) 변환 필요. '*base'(또는 비표준)면
+        # 이미 UR 컨벤션으로 캘리브레이션됐다고 가정하고 변환 생략.
+        self.needs_urscript_flip = self.base_frame.endswith('base_link')
+
         # 캘리브레이션 결과 로드 (Eye-on-Base 또는 Eye-in-Hand 자동 감지)
         cal_file = self.get_parameter('calibration_file').value
         self.calib_type, self.T_calib = self._load_calibration(cal_file)
         self.get_logger().info(f"Calibration type: {self.calib_type}")
         self.get_logger().info(f"Calibration matrix:\n{self.T_calib}")
+        if self.needs_urscript_flip:
+            self.get_logger().info(
+                f"base_frame='{self.base_frame}' ends with 'base_link' "
+                "→ Rz(π) will be applied before URScript movel "
+                "(REP-103 → UR base frame).")
+        else:
+            self.get_logger().info(
+                f"base_frame='{self.base_frame}' assumed UR-native "
+                "→ no URScript frame conversion.")
 
         # Eye-in-Hand인 경우 TF listener 필요 (현재 T_base_ee 조회)
         if self.calib_type == 'eye_in_hand':
@@ -299,16 +314,38 @@ class VerificationNode(Node):
         if self.click_p_base is None:
             self.get_logger().warn("No valid click point to send.")
             return
-        x, y, z = self.click_p_base
-        z_target = z + self.z_offset
+        x_src, y_src, z_src = self.click_p_base
+        z_src = z_src + self.z_offset
+        rx_src, ry_src, rz_src = self.rx, self.ry, self.rz
+
+        if self.needs_urscript_flip:
+            # Position: Rz(π) → diag(-1, -1, 1)
+            x = -x_src
+            y = -y_src
+            z =  z_src
+            # Orientation: R_base_tcp = Rz(π) @ R_baseLink_tcp (left-multiply only).
+            # axis-angle 성분 부호반전은 일반 회전엔 부정확하므로 rotvec→matrix→
+            # 좌측곱→rotvec 경로로 변환.
+            rotvec_src = np.array([rx_src, ry_src, rz_src], dtype=np.float64)
+            R_src, _ = cv2.Rodrigues(rotvec_src)
+            R_dst = np.diag([-1.0, -1.0, 1.0]) @ R_src
+            rotvec_dst, _ = cv2.Rodrigues(R_dst)
+            rx, ry, rz = rotvec_dst.flatten()
+        else:
+            x, y, z = x_src, y_src, z_src
+            rx, ry, rz = rx_src, ry_src, rz_src
+
         cmd = (
-            f"movel(p[{x:.4f},{y:.4f},{z_target:.4f},"
-            f"{self.rx:.4f},{self.ry:.4f},{self.rz:.4f}], "
+            f"movel(p[{x:.4f},{y:.4f},{z:.4f},"
+            f"{rx:.4f},{ry:.4f},{rz:.4f}], "
             f"a={self.move_accel}, v={self.move_speed})\n"
         )
         self.script_pub.publish(String(data=cmd))
         self.move_in_progress = True
-        self.get_logger().info(f"Sent: {cmd.strip()}")
+        self.get_logger().info(
+            f"src=({x_src:+.4f},{y_src:+.4f},{z_src:+.4f}) → "
+            f"sent=({x:+.4f},{y:+.4f},{z:+.4f})  flip={self.needs_urscript_flip}  "
+            f"Sent: {cmd.strip()}")
 
     def _send_stop(self):
         cmd = f"stopl({self.stop_decel})\n"
