@@ -336,16 +336,38 @@ class VerificationNode(Node):
             rx, ry, rz = rx_src, ry_src, rz_src
 
         cmd = (
+            "def verify_and_move():\n"
+            f"  target = p[{x:.4f},{y:.4f},{z:.4f},"
+            f"{rx:.4f},{ry:.4f},{rz:.4f}]\n"
+            "  qnear = get_actual_joint_positions()\n"
+            "  ik_ok = get_inverse_kin_has_solution(target, qnear)\n"
+            "  safety_ok = False\n"
+            "  if ik_ok:\n"
+            "    safety_ok = is_within_safety_limits(target, qnear)\n"
+            "  end\n"
+            "  if ik_ok and safety_ok:\n"
+            "    textmsg(\"Verification target accepted\")\n"
+            f"    movel(target, a={self.move_accel}, v={self.move_speed})\n"
+            "  else:\n"
+            "    textmsg(\"Verification target rejected: ik_ok=\", ik_ok, "
+            "\" safety_ok=\", safety_ok)\n"
+            "  end\n"
+            "end\n"
+            "verify_and_move()\n"
+        )
+        """
+        cmd = (
             f"movel(p[{x:.4f},{y:.4f},{z:.4f},"
             f"{rx:.4f},{ry:.4f},{rz:.4f}], "
             f"a={self.move_accel}, v={self.move_speed})\n"
         )
+        """
         self.script_pub.publish(String(data=cmd))
         self.move_in_progress = True
         self.get_logger().info(
             f"src=({x_src:+.4f},{y_src:+.4f},{z_src:+.4f}) → "
             f"sent=({x:+.4f},{y:+.4f},{z:+.4f})  flip={self.needs_urscript_flip}  "
-            f"Sent: {cmd.strip()}")
+            "Sent guarded move command (IK + safety limit checked on UR controller).")
 
     def _send_stop(self):
         cmd = f"stopl({self.stop_decel})\n"
